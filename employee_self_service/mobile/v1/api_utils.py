@@ -24,57 +24,19 @@ def exception_handler(e):
 
 
 def generate_key(user):
-    """Generate and persist API keys for a user.
-    
-    Args:
-        user (str): User ID to generate keys for
-        
-    Returns:
-        dict: Dictionary containing api_key and api_secret
-    """
-    try:
-        # Log the user we're trying to update
-        frappe.logger().debug(f"Generating API keys for user: {user}")
-        
-        # Get user document with all fields
-        user_details = frappe.get_doc("User", user)
-        frappe.logger().debug(f"Current user state - api_key: {bool(user_details.api_key)}, api_secret: {bool(user_details.api_secret)}")
-        
-        # Generate new keys if either is missing
-        if not user_details.api_key or not user_details.api_secret:
-            api_secret = frappe.generate_hash(length=15)
-            api_key = frappe.generate_hash(length=15)
-            
-            frappe.logger().debug(f"Generated new keys - api_key: {api_key}, api_secret: {api_secret}")
-            
-            # Update both values in a single transaction
-            frappe.db.begin()
-            try:
-                frappe.db.set_value("User", user, "api_key", api_key, update_modified=False)
-                frappe.db.set_value("User", user, "api_secret", api_secret, update_modified=False)
-                frappe.db.commit()
-            except Exception as e:
-                frappe.db.rollback()
-                raise
-            
-            # Verify the values were saved
-            saved_user = frappe.get_doc("User", user)
-            if saved_user.api_key != api_key or saved_user.api_secret != api_secret:
-                frappe.logger().error(f"Keys were not saved correctly for user {user}")
-                raise Exception("Failed to persist API keys")
-            
-            frappe.logger().debug("API keys successfully saved")
-            return {"api_secret": api_secret, "api_key": api_key}
-        else:
-            # Return existing keys
-            return {
-                "api_secret": user_details.get_password("api_secret"),
-                "api_key": user_details.get("api_key")
-            }
-    except Exception as e:
-        frappe.logger().error(f"API Key Generation Error for user {user}: {str(e)}")
-        frappe.logger().error(frappe.get_traceback())
-        raise
+    user_details = frappe.get_doc("User", user)
+    api_secret = api_key = ""
+    if not user_details.api_key and not user_details.api_secret:
+        api_secret = frappe.generate_hash(length=15)
+        # if api key is not set generate api key
+        api_key = frappe.generate_hash(length=15)
+        user_details.api_key = api_key
+        user_details.api_secret = api_secret
+        user_details.save(ignore_permissions=True)
+    else:
+        api_secret = user_details.get_password("api_secret")
+        api_key = user_details.get("api_key")
+    return {"api_secret": api_secret, "api_key": api_key}
 
 
 def ess_validate(methods):
