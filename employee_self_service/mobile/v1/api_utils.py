@@ -47,18 +47,17 @@ def generate_key(user):
             
             frappe.logger().debug(f"Generated new keys - api_key: {api_key}, api_secret: {api_secret}")
             
-            # Update the user document
-            user_details.api_key = api_key
-            user_details.api_secret = api_secret
+            # Update both values in a single transaction
+            frappe.db.begin()
+            try:
+                frappe.db.set_value("User", user, "api_key", api_key, update_modified=False)
+                frappe.db.set_value("User", user, "api_secret", api_secret, update_modified=False)
+                frappe.db.commit()
+            except Exception as e:
+                frappe.db.rollback()
+                raise
             
-            # Save with proper permissions
-            user_details.flags.ignore_permissions = True
-            user_details.save()
-            
-            # Verify the save
-            frappe.db.commit()
-            
-            # Double check the values were saved
+            # Verify the values were saved
             saved_user = frappe.get_doc("User", user)
             if saved_user.api_key != api_key or saved_user.api_secret != api_secret:
                 frappe.logger().error(f"Keys were not saved correctly for user {user}")
