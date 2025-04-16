@@ -33,12 +33,19 @@ def generate_key(user):
         dict: Dictionary containing api_key and api_secret
     """
     try:
+        # Log the user we're trying to update
+        frappe.logger().debug(f"Generating API keys for user: {user}")
+        
+        # Get user document with all fields
         user_details = frappe.get_doc("User", user)
+        frappe.logger().debug(f"Current user state - api_key: {bool(user_details.api_key)}, api_secret: {bool(user_details.api_secret)}")
         
         # Generate new keys if either is missing
         if not user_details.api_key or not user_details.api_secret:
             api_secret = frappe.generate_hash(length=15)
             api_key = frappe.generate_hash(length=15)
+            
+            frappe.logger().debug(f"Generated new keys - api_key: {api_key}, api_secret: {api_secret}")
             
             # Update the user document
             user_details.api_key = api_key
@@ -47,8 +54,17 @@ def generate_key(user):
             # Save with proper permissions
             user_details.flags.ignore_permissions = True
             user_details.save()
+            
+            # Verify the save
             frappe.db.commit()
             
+            # Double check the values were saved
+            saved_user = frappe.get_doc("User", user)
+            if saved_user.api_key != api_key or saved_user.api_secret != api_secret:
+                frappe.logger().error(f"Keys were not saved correctly for user {user}")
+                raise Exception("Failed to persist API keys")
+            
+            frappe.logger().debug("API keys successfully saved")
             return {"api_secret": api_secret, "api_key": api_key}
         else:
             # Return existing keys
@@ -57,7 +73,8 @@ def generate_key(user):
                 "api_key": user_details.get("api_key")
             }
     except Exception as e:
-        frappe.log_error(title="API Key Generation Error", message=str(e))
+        frappe.logger().error(f"API Key Generation Error for user {user}: {str(e)}")
+        frappe.logger().error(frappe.get_traceback())
         raise
 
 
