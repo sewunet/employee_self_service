@@ -645,14 +645,96 @@ def get_latest_ss(dashboard_data, employee):
 
 
 @frappe.whitelist()
+@ess_validate(methods=["POST"])
 def create_employee_log(
     log_type, location=None, odometer_reading=None, attendance_image=None
 ):
     try:
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["name", "default_shift"]
+            frappe.session.user, fields=["name", "default_shift", "branch", "company"]
         )
 
+        # Get ESS settings for location validation
+        ess_settings = get_ess_settings()
+        require_location = ess_settings.get("check_in_with_location", 0)
+        
+        if require_location and not location:
+            return gen_response(400, "Location is required for check-in")
+
+        # Get branch and company geofencing settings
+        branch = frappe.db.get_value(
+            "Branch",
+            {"branch": emp_data.get("branch")},
+            ["branch", "latitude", "longitude", "radius", "name"],
+            as_dict=1,
+        )
+
+        company = frappe.db.get_value(
+            "Company",
+            emp_data.get("company"),
+            ["name", "latitude", "longitude", "radius"],
+            as_dict=1,
+        )
+
+        # Validate location if provided
+        if location:
+            try:
+                location_data = json.loads(location)
+                if not isinstance(location_data, dict) or "latitude" not in location_data or "longitude" not in location_data:
+                    return gen_response(400, "Invalid location format. Expected {latitude, longitude}")
+
+                # Convert coordinates to float
+                try:
+                    lat = float(location_data["latitude"])
+                    lng = float(location_data["longitude"])
+                except (ValueError, TypeError):
+                    return gen_response(400, "Invalid coordinate values")
+
+                # Validate coordinate ranges
+                if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                    return gen_response(400, "Invalid coordinate ranges. Latitude must be between -90 and 90, longitude between -180 and 180")
+
+                # Check against branch geofence if available
+                if branch and branch.latitude and branch.longitude and branch.radius:
+                    distance = calculate_distance(
+                        lat, lng,
+                        float(branch.latitude),
+                        float(branch.longitude)
+                    )
+                    if distance > float(branch.radius):
+                        return gen_response(
+                            403,
+                            f"You are {distance:.2f} km away from your branch ({branch.branch}). Please be within {branch.radius} km radius to check in."
+                        )
+
+                # Check against company geofence if available
+                if company and company.latitude and company.longitude and company.radius:
+                    distance = calculate_distance(
+                        lat, lng,
+                        float(company.latitude),
+                        float(company.longitude)
+                    )
+                    if distance > float(company.radius):
+                        return gen_response(
+                            403,
+                            f"You are {distance:.2f} km away from your company ({company.name}). Please be within {company.radius} km radius to check in."
+                        )
+
+                # Log successful location validation
+                frappe.logger().info(
+                    f"Location validated for employee {emp_data.get('name')} at {lat}, {lng}"
+                )
+
+            except json.JSONDecodeError:
+                return gen_response(400, "Invalid JSON format in location data")
+            except Exception as e:
+                frappe.log_error(
+                    f"Error in location validation: {str(e)}",
+                    "Employee Checkin Location Validation"
+                )
+                return gen_response(500, "Error validating location")
+
+        # Create check-in record
         log_doc = frappe.get_doc(
             dict(
                 doctype="Employee Checkin",
@@ -661,22 +743,45 @@ def create_employee_log(
                 time=now_datetime().__str__()[:-7],
                 location=location,
                 odometer_reading=odometer_reading,
+                branch=branch.get("name") if branch else None,
+                company=company.get("name") if company else None
             )
         ).insert(ignore_permissions=True)
 
+        # Handle attendance image if provided
         if "file" in frappe.request.files:
-            file = upload_file()
-            file.attached_to_doctype = "Employee Checkin"
-            file.attached_to_name = log_doc.name
-            file.attached_to_field = "attendance_image"
-            file.save(ignore_permissions=True)
-            log_doc.attendance_image = file.get("file_url")
-            log_doc.save(ignore_permissions=True)
+            try:
+                file = upload_file()
+                file.attached_to_doctype = "Employee Checkin"
+                file.attached_to_name = log_doc.name
+                file.attached_to_field = "attendance_image"
+                file.save(ignore_permissions=True)
+                log_doc.attendance_image = file.get("file_url")
+                log_doc.save(ignore_permissions=True)
+            except Exception as e:
+                frappe.log_error(
+                    f"Error saving attendance image: {str(e)}",
+                    "Employee Checkin Image Upload"
+                )
 
         update_shift_last_sync(emp_data)
-        return gen_response(200, "Employee log added")
+        return gen_response(200, "Employee log added successfully")
     except Exception as e:
         return exception_handler(e)
+
+def calculate_distance(lat1, lng1, lat2, lng2):
+    """Calculate distance between two points using Haversine formula"""
+    from math import sin, cos, sqrt, atan2, radians
+    
+    # Convert coordinates to radians
+    lat1, lng1, lat2, lng2 = map(radians, [lat1, lng1, lat2, lng2])
+    
+    # Calculate distance
+    dlat = lat2 - lat1
+    dlng = lng2 - lng1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlng/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    return 6371 * c  # Earth's radius in km
 
 
 def update_shift_last_sync(emp_data):
