@@ -24,19 +24,41 @@ def exception_handler(e):
 
 
 def generate_key(user):
-    user_details = frappe.get_doc("User", user)
-    api_secret = api_key = ""
-    if not user_details.api_key and not user_details.api_secret:
-        api_secret = frappe.generate_hash(length=15)
-        # if api key is not set generate api key
-        api_key = frappe.generate_hash(length=15)
-        user_details.api_key = api_key
-        user_details.api_secret = api_secret
-        user_details.save(ignore_permissions=True)
-    else:
-        api_secret = user_details.get_password("api_secret")
-        api_key = user_details.get("api_key")
-    return {"api_secret": api_secret, "api_key": api_key}
+    """Generate and persist API keys for a user.
+    
+    Args:
+        user (str): User ID to generate keys for
+        
+    Returns:
+        dict: Dictionary containing api_key and api_secret
+    """
+    try:
+        user_details = frappe.get_doc("User", user)
+        
+        # Generate new keys if either is missing
+        if not user_details.api_key or not user_details.api_secret:
+            api_secret = frappe.generate_hash(length=15)
+            api_key = frappe.generate_hash(length=15)
+            
+            # Update the user document
+            user_details.api_key = api_key
+            user_details.api_secret = api_secret
+            
+            # Save with proper permissions
+            user_details.flags.ignore_permissions = True
+            user_details.save()
+            frappe.db.commit()
+            
+            return {"api_secret": api_secret, "api_key": api_key}
+        else:
+            # Return existing keys
+            return {
+                "api_secret": user_details.get_password("api_secret"),
+                "api_key": user_details.get("api_key")
+            }
+    except Exception as e:
+        frappe.log_error(title="API Key Generation Error", message=str(e))
+        raise
 
 
 def ess_validate(methods):
