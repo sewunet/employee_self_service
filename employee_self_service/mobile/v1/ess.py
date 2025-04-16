@@ -661,18 +661,11 @@ def create_employee_log(
         if require_location and not location:
             return gen_response(400, "Location is required for check-in")
 
-        # Get branch and company geofencing settings
+        # Get branch geofencing settings
         branch = frappe.db.get_value(
             "Branch",
             {"branch": emp_data.get("branch")},
             ["branch", "latitude", "longitude", "radius", "name"],
-            as_dict=1,
-        )
-
-        company = frappe.db.get_value(
-            "Company",
-            emp_data.get("company"),
-            ["name", "latitude", "longitude", "radius"],
             as_dict=1,
         )
 
@@ -707,19 +700,6 @@ def create_employee_log(
                             f"You are {distance:.2f} km away from your branch ({branch.branch}). Please be within {branch.radius} km radius to check in."
                         )
 
-                # Check against company geofence if available
-                if company and company.latitude and company.longitude and company.radius:
-                    distance = calculate_distance(
-                        lat, lng,
-                        float(company.latitude),
-                        float(company.longitude)
-                    )
-                    if distance > float(company.radius):
-                        return gen_response(
-                            403,
-                            f"You are {distance:.2f} km away from your company ({company.name}). Please be within {company.radius} km radius to check in."
-                        )
-
                 # Log successful location validation
                 frappe.logger().info(
                     f"Location validated for employee {emp_data.get('name')} at {lat}, {lng}"
@@ -744,7 +724,7 @@ def create_employee_log(
                 location=location,
                 odometer_reading=odometer_reading,
                 branch=branch.get("name") if branch else None,
-                company=company.get("name") if company else None
+                company=emp_data.get("company")
             )
         ).insert(ignore_permissions=True)
 
