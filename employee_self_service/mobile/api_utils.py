@@ -23,7 +23,7 @@ def exception_handel(e):
         return gen_response(500, cstr(e))
 
 
-def generate_key(user):
+def generate_key(user:str):
     user_details = frappe.get_doc("User", user)
     api_secret = api_key = ""
     if not user_details.api_key and not user_details.api_secret:
@@ -32,7 +32,7 @@ def generate_key(user):
         api_key = frappe.generate_hash(length=15)
         user_details.api_key = api_key
         user_details.api_secret = api_secret
-        user_details.save(ignore_permissions=True)
+        user_details.save(ignore_permissions=True,ignore_version=True)
     else:
         api_secret = user_details.get_password("api_secret")
         api_key = user_details.get("api_key")
