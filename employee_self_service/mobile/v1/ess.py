@@ -650,18 +650,19 @@ def create_employee_log(
     log_type, location=None, odometer_reading=None, attendance_image=None
 ):
     try:
+        # Get employee info
         emp_data = get_employee_by_user(
             frappe.session.user, fields=["name", "default_shift", "branch", "company"]
         )
 
-        # Get ESS settings for location validation
+        # Fetch ESS settings
         ess_settings = get_ess_settings()
         require_location = ess_settings.get("check_in_with_location", 0)
-        
+
         if require_location and not location:
             return gen_response(400, "Location is required for check-in")
 
-        # Get branch geofencing settings
+        # Fetch branch details including geofencing settings
         branch = frappe.db.get_value(
             "Branch",
             {"branch": emp_data.get("branch")},
@@ -669,10 +670,12 @@ def create_employee_log(
             as_dict=1,
         )
 
-        # Validate location if provided
+        lat, lng = None, None
+
+        # Validate and parse location input
         if location:
             try:
-                # Try to parse location as JSON first
+                # First attempt: JSON format
                 try:
                     location_data = json.loads(location)
                     if isinstance(location_data, dict):
@@ -681,19 +684,16 @@ def create_employee_log(
                     else:
                         raise ValueError("Location must be a JSON object with latitude and longitude")
                 except (json.JSONDecodeError, ValueError):
-                    # If JSON parsing fails, try to parse as comma-separated string
-                    try:
-                        lat_str, lng_str = location.split(",")
-                        lat = float(lat_str.strip())
-                        lng = float(lng_str.strip())
-                    except (ValueError, AttributeError):
-                        return gen_response(400, "Invalid location format. Expected either JSON object with latitude/longitude or comma-separated coordinates")
+                    # Second attempt: comma-separated string
+                    lat_str, lng_str = location.split(",")
+                    lat = float(lat_str.strip())
+                    lng = float(lng_str.strip())
 
-                # Validate coordinate ranges
+                # Coordinate range validation
                 if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
                     return gen_response(400, "Invalid coordinate ranges. Latitude must be between -90 and 90, longitude between -180 and 180")
 
-                # Check against branch geofence if available
+                # Geofence validation (if branch has radius and coordinates)
                 if branch and branch.latitude and branch.longitude and branch.radius:
                     distance = calculate_distance(
                         lat, lng,
@@ -718,7 +718,7 @@ def create_employee_log(
                 )
                 return gen_response(500, "Error validating location")
 
-        # Create check-in record
+        # Insert Employee Checkin record
         log_doc = frappe.get_doc(
             dict(
                 doctype="Employee Checkin",
@@ -726,15 +726,15 @@ def create_employee_log(
                 log_type=log_type,
                 time=now_datetime().__str__()[:-7],
                 location=location,
-                longitude=float(location.get("latitude")),
-                latitude= float(location.get("longitude")),
+                longitude=lng,
+                latitude=lat,
                 odometer_reading=odometer_reading,
                 branch=branch.get("name") if branch else None,
                 company=emp_data.get("company")
             )
         ).insert(ignore_permissions=True)
 
-        # Handle attendance image if provided
+        # Handle image upload
         if "file" in frappe.request.files:
             try:
                 file = upload_file()
@@ -742,6 +742,7 @@ def create_employee_log(
                 file.attached_to_name = log_doc.name
                 file.attached_to_field = "attendance_image"
                 file.save(ignore_permissions=True)
+
                 log_doc.attendance_image = file.get("file_url")
                 log_doc.save(ignore_permissions=True)
             except Exception as e:
@@ -752,8 +753,10 @@ def create_employee_log(
 
         update_shift_last_sync(emp_data)
         return gen_response(200, "Employee log added successfully")
+
     except Exception as e:
         return exception_handler(e)
+
 
 def calculate_distance(lat1, lng1, lat2, lng2):
     """Calculate distance between two points using Haversine formula"""
