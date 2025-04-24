@@ -672,16 +672,22 @@ def create_employee_log(
         # Validate location if provided
         if location:
             try:
-                location_data = json.loads(location)
-                if not isinstance(location_data, dict) or "latitude" not in location_data or "longitude" not in location_data:
-                    return gen_response(400, "Invalid location format. Expected {latitude, longitude}")
-
-                # Convert coordinates to float
+                # Try to parse location as JSON first
                 try:
-                    lat = float(location_data["latitude"])
-                    lng = float(location_data["longitude"])
-                except (ValueError, TypeError):
-                    return gen_response(400, "Invalid coordinate values")
+                    location_data = json.loads(location)
+                    if isinstance(location_data, dict):
+                        lat = float(location_data.get("latitude"))
+                        lng = float(location_data.get("longitude"))
+                    else:
+                        raise ValueError("Location must be a JSON object with latitude and longitude")
+                except (json.JSONDecodeError, ValueError):
+                    # If JSON parsing fails, try to parse as comma-separated string
+                    try:
+                        lat_str, lng_str = location.split(",")
+                        lat = float(lat_str.strip())
+                        lng = float(lng_str.strip())
+                    except (ValueError, AttributeError):
+                        return gen_response(400, "Invalid location format. Expected either JSON object with latitude/longitude or comma-separated coordinates")
 
                 # Validate coordinate ranges
                 if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
@@ -705,8 +711,6 @@ def create_employee_log(
                     f"Location validated for employee {emp_data.get('name')} at {lat}, {lng}"
                 )
 
-            except json.JSONDecodeError:
-                return gen_response(400, "Invalid JSON format in location data")
             except Exception as e:
                 frappe.log_error(
                     f"Error in location validation: {str(e)}",
@@ -722,6 +726,8 @@ def create_employee_log(
                 log_type=log_type,
                 time=now_datetime().__str__()[:-7],
                 location=location,
+                longitude=float(location.get("latitude")),
+                latitude= float(location.get("longitude")),
                 odometer_reading=odometer_reading,
                 branch=branch.get("name") if branch else None,
                 company=emp_data.get("company")
