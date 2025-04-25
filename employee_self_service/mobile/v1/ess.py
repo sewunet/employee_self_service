@@ -647,53 +647,46 @@ def get_latest_ss(dashboard_data, employee):
 @frappe.whitelist()
 @ess_validate(methods=["POST"])
 def create_employee_log(
-    log_type, location=None, odometer_reading=None, attendance_image=None
+    log_type: str,
+    location: str = None,
+    latitude: float = None,
+    longitude: float = None,
+    odometer_reading: float = None,
+    attendance_image: str = None
 ):
     try:
-        # Get employee info
+        # Fetch employee information
         emp_data = get_employee_by_user(
             frappe.session.user, fields=["name", "default_shift", "branch", "company"]
         )
 
-        # Fetch ESS settings
+        # Load ESS settings
         ess_settings = get_ess_settings()
         require_location = ess_settings.get("check_in_with_location", 0)
 
         if require_location and not location:
             return gen_response(400, "Location is required for check-in")
 
-        # Fetch branch details including geofencing settings
+        # Get branch and geofencing data
         branch = frappe.db.get_value(
             "Branch",
             {"branch": emp_data.get("branch")},
             ["branch", "latitude", "longitude", "radius", "name"],
-            as_dict=1,
+            as_dict=True
         )
 
         lat, lng = None, None
 
-        # Validate and parse location input
-        if location:
+        if latitude is not None and longitude is not None:
             try:
-                # First attempt: JSON format
-                try:
-                    location_data = json.loads(location)
-                    if isinstance(location_data, dict):
-                        lat = float(location_data.get("latitude"))
-                        lng = float(location_data.get("longitude"))
-                    else:
-                        raise ValueError("Location must be a JSON object with latitude and longitude")
-                except (json.JSONDecodeError, ValueError):
-                    # Second attempt: comma-separated string
-                    lat_str, lng_str = location.split(",")
-                    lat = float(lat_str.strip())
-                    lng = float(lng_str.strip())
+                lat = float(latitude)
+                lng = float(longitude)
 
-                # Coordinate range validation
+                # Validate latitude/longitude ranges
                 if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
-                    return gen_response(400, "Invalid coordinate ranges. Latitude must be between -90 and 90, longitude between -180 and 180")
+                    return gen_response(400, "Invalid coordinates: latitude must be between -90 and 90, longitude between -180 and 180")
 
-                # Geofence validation (if branch has radius and coordinates)
+                # Validate geofencing if enabled for branch
                 if branch and branch.latitude and branch.longitude and branch.radius:
                     distance = calculate_distance(
                         lat, lng,
@@ -706,35 +699,32 @@ def create_employee_log(
                             f"You are {distance:.2f} km away from your branch ({branch.branch}). Please be within {branch.radius} km radius to check in."
                         )
 
-                # Log successful location validation
                 frappe.logger().info(
-                    f"Location validated for employee {emp_data.get('name')} at {lat}, {lng}"
+                    f"Location validated for employee {emp_data.get('name')} at lat: {lat}, lng: {lng}"
                 )
 
             except Exception as e:
                 frappe.log_error(
-                    f"Error in location validation: {str(e)}",
-                    "Employee Checkin Location Validation"
+                    f"Error parsing or validating coordinates: {str(e)}",
+                    "Employee Check-in Location Validation"
                 )
                 return gen_response(500, "Error validating location")
 
-        # Insert Employee Checkin record
-        log_doc = frappe.get_doc(
-            dict(
-                doctype="Employee Checkin",
-                employee=emp_data.get("name"),
-                log_type=log_type,
-                time=now_datetime().__str__()[:-7],
-                location=location,
-                longitude=lng,
-                latitude=lat,
-                odometer_reading=odometer_reading,
-                branch=branch.get("name") if branch else None,
-                company=emp_data.get("company")
-            )
-        ).insert(ignore_permissions=True)
+        # Create employee check-in record
+        log_doc = frappe.get_doc({
+            "doctype": "Employee Checkin",
+            "employee": emp_data.get("name"),
+            "log_type": log_type,
+            "time": now_datetime().strftime("%Y-%m-%d %H:%M:%S"),
+            "location": location,
+            "latitude": lat,
+            "longitude": lng,
+            "odometer_reading": odometer_reading,
+            "branch": branch.get("name") if branch else None,
+            "company": emp_data.get("company")
+        }).insert(ignore_permissions=True)
 
-        # Handle image upload
+        # Handle attendance image upload if provided
         if "file" in frappe.request.files:
             try:
                 file = upload_file()
@@ -745,6 +735,7 @@ def create_employee_log(
 
                 log_doc.attendance_image = file.get("file_url")
                 log_doc.save(ignore_permissions=True)
+
             except Exception as e:
                 frappe.log_error(
                     f"Error saving attendance image: {str(e)}",
